@@ -1,6 +1,6 @@
 """
 Scheduler Service for Daily Papers Tool
-Chạy cron job vào 12:00 trưa giờ VN (UTC+7) để crawl papers của ngày hôm trước
+Chạy cron job vào giờ VN cố định (UTC+7) để crawl papers của ngày hôm trước
 """
 import os
 import sys
@@ -9,6 +9,9 @@ import schedule
 import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
+# Time to run
+TIME = "10:00"
 
 # Load environment variables
 load_dotenv(override=False)
@@ -79,9 +82,9 @@ def run_scheduled_job(model="moonshotai/kimi-k2.5", force_update=False):
 
 
 def main():
-    """
+    f"""
     Main entry point cho scheduler service
-    Schedule job chạy vào 12:00 trưa giờ VN mỗi ngày
+    Schedule job chạy vào {TIME} trưa giờ VN mỗi ngày
     """
     # Get model from environment or use default
     model = os.getenv('LLM_MODEL', 'moonshotai/kimi-k2.5')
@@ -89,10 +92,10 @@ def main():
     logger.info("Starting Daily Papers Scheduler Service")
     logger.info(f"Using model: {model}")
     logger.info(f"Current time (VN): {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info("Scheduled to run daily at 12:00 (noon) Vietnam time")
+    logger.info(f"Scheduled to run daily at {TIME} (noon) Vietnam time")
     
-    # Schedule job at 12:00 noon Vietnam time
-    schedule.every().day.at("15:30").do(run_scheduled_job, model=model)
+    # Schedule job at TIME Vietnam time
+    schedule.every().day.at(TIME).do(run_scheduled_job, model=model)
     
     # Log next run time
     next_run = schedule.next_run()
