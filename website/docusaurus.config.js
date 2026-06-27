@@ -230,7 +230,6 @@ const config = {
             position: 'left',
             label: 'Digest',
           },
-          {to: '/blog', label: 'Blog', position: 'left'},
           {
             href: 'https://github.com/gnust-company/daily_papers_digest',
             label: 'GitHub',
@@ -239,35 +238,6 @@ const config = {
         ],
       },
       footer: {
-        style: 'dark',
-        links: [
-          {
-            title: 'Nội dung',
-            items: [
-              {
-                label: 'Digest mới nhất',
-                to: latestDigestRoute,
-              },
-              {
-                label: 'Blog',
-                to: '/blog',
-              },
-            ],
-          },
-          {
-            title: 'Liên kết',
-            items: [
-              {
-                label: 'Hugging Face Papers',
-                href: 'https://huggingface.co/papers',
-              },
-              {
-                label: 'GitHub',
-                href: 'https://github.com/gnust-company/daily_papers_digest',
-              },
-            ],
-          },
-        ],
         copyright: `Copyright © ${new Date().getFullYear()} Daily Papers Digest. Built with Docusaurus.`,
       },
       prism: {

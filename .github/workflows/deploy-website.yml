@@ -22,19 +22,14 @@ name: Deploy website to GitHub Pages
 #   MINIO_SECURE     'true' (default) for https, 'false' for http
 
 on:
-  # 1) Triggered from your machine after a digest run completes.
+  # 1) Triggered from your machine after a digest run completes. This is the
+  #    ONLY automatic trigger — the website rebuilds when content changes, not
+  #    on a cron or on every UI-code push.
   repository_dispatch:
     types: [digest-updated]
-  # 2) Rebuild when the site code itself changes.
-  push:
-    branches: [main]
-    paths:
-      - 'website/**'
-      - '.github/workflows/deploy-website.yml'
-  # 3) Manual "Run workflow" button + safety-net daily cron.
+  # 2) Manual "Run workflow" button (use this when you change website code and
+  #    want a rebuild, since pushes no longer trigger it automatically).
   workflow_dispatch: {}
-  schedule:
-    - cron: '0 23 * * *' # 23:00 UTC = 06:00 Asia/Ho_Chi_Minh (fallback)
 
 # Allow this workflow to publish to Pages.
 permissions:
