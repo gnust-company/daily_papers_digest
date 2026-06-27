@@ -1,0 +1,110 @@
+name: Deploy website to GitHub Pages
+
+# Builds the Docusaurus site in website/ and publishes it to GitHub Pages.
+#
+# Content flow:
+#   Your machine: run digest -> push .md to MinIO -> trigger THIS workflow
+#   (via repository_dispatch). THIS workflow pulls the .md from MinIO into
+#   ./summaries, builds, and deploys to Pages.
+#
+# This workflow never touches Postgres or the LLM — it only reads .md from MinIO.
+#
+# To trigger from your machine after a digest run:
+#   python trigger_deploy.py        (see that script), or
+#   scripts/trigger_deploy.sh
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   MINIO_ENDPOINT   e.g. minio-api.smartsolar.io.vn  (host only, no scheme)
+#   MINIO_ACCESS_KEY (read-only key recommended)
+#   MINIO_SECRET_KEY
+#   MINIO_BUCKET     e.g. dtung.vu
+# Optional repository variables (Settings -> Variables):
+#   MINIO_SECURE     'true' (default) for https, 'false' for http
+
+on:
+  # 1) Triggered from your machine after a digest run completes.
+  repository_dispatch:
+    types: [digest-updated]
+  # 2) Rebuild when the site code itself changes.
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/deploy-website.yml'
+  # 3) Manual "Run workflow" button + safety-net daily cron.
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 23 * * *' # 23:00 UTC = 06:00 Asia/Ho_Chi_Minh (fallback)
+
+# Allow this workflow to publish to Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; let an in-progress run finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install MinIO client (mc)
+        run: |
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc \
+            -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+
+      - name: Pull digests from MinIO into ./summaries
+        env:
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
+          MINIO_SECURE: ${{ vars.MINIO_SECURE || 'true' }}
+        run: |
+          scheme=https
+          if [ "$MINIO_SECURE" = "false" ]; then scheme=http; fi
+          mc alias set src "$scheme://$MINIO_ENDPOINT" \
+            "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+          mkdir -p summaries
+          # Mirror the summaries/ prefix from the bucket into ./summaries.
+          mc mirror --overwrite --remove \
+            "src/$MINIO_BUCKET/summaries" summaries
+          echo "Pulled $(find summaries -name '*.md' | wc -l) digest file(s)."
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Build website
+        working-directory: website
+        run: npm run build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

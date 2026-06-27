@@ -9,7 +9,7 @@ load_dotenv(override=False)
 from langchain_openai import ChatOpenAI
 
 
-def get_llm(model: str = None, temperature: float = 0.7) -> ChatOpenAI:
+def get_llm(model: str = None, temperature: float = 1) -> ChatOpenAI:
     """
     Initialize and return a ChatOpenAI instance configured for NVIDIA NIM.
     

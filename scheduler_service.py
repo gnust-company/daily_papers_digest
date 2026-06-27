@@ -21,6 +21,9 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from daily_papers_tool import run_daily_digest
 
+# Ensure the log directory exists before configuring the file handler.
+os.makedirs('logs', exist_ok=True)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -67,9 +70,16 @@ def run_scheduled_job(model="moonshotai/kimi-k2.5", force_update=False):
         logger.info(f"Running digest for date: {date_str} with model: {model}")
         
         result = run_daily_digest(date_str, model=model, force_update=force_update)
-        
+
         if result:
             logger.info(f"Job completed successfully. Report saved to: {result}")
+            # Digest is on MinIO now — trigger the GitHub Pages rebuild so the
+            # website picks it up. Failure here never affects the digest.
+            try:
+                from trigger_deploy import trigger_deploy
+                trigger_deploy()
+            except Exception as e:
+                logger.warning(f"Deploy trigger failed (non-fatal): {e}")
         else:
             logger.info(f"No papers found for {date_str}. Skipped this day.")
             
