@@ -142,6 +142,12 @@ const config = {
   // raw digest markdown be served directly from ../summaries without escaping.
   markdown: {
     format: 'detect',
+    hooks: {
+      // Some older digests reference local figure images (e.g.
+      // "papers\2026-01-06\..._overview.png") that were never uploaded to
+      // MinIO. Warn instead of failing the whole build on those.
+      onBrokenMarkdownImages: 'warn',
+    },
   },
 
   // Expose the newest digest route so the homepage can deep-link to it.
