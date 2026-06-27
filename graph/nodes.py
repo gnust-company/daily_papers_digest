@@ -351,7 +351,13 @@ def generate_report_node(state: DigestState) -> dict:
 
         report += f"--- \n\n"
         report += f"## {i}. {paper.get('title', 'Untitled')} *({paper.get('upvotes', 0)} votes)*\n\n"
-        report += f"**Tác giả:** {', '.join(paper.get('authors', []))}\n\n"
+        # Show at most 5 authors; append "et al." when there are more.
+        authors = paper.get('authors', [])
+        if len(authors) > 5:
+            authors_display = ', '.join(authors[:5]) + ', et al.'
+        else:
+            authors_display = ', '.join(authors)
+        report += f"**Tác giả:** {authors_display}\n\n"
 
         published = paper.get("published_at")
         report += f"**Xuất bản lúc:** {published[:10] if published else 'N/A'}\n\n"
