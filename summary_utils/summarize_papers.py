@@ -36,27 +36,27 @@ from llm_provider import get_llm
 
 # Define Pydantic models for structured output
 class PaperSummary(BaseModel):
-    """Structured summary of a research paper."""
+    """Structured summary of a research paper (concise restatement, NOT a translation)."""
     tags: List[str] = Field(
-        description="List of AI/ML keywords (e.g., RAG, Diffusion, GAN, LLMs, etc.)"
+        description="3-8 short AI/ML keywords (e.g., RAG, Diffusion, GAN, LLMs)."
     )
     main_problem: str = Field(
-        description="Core problems that this work aims to solve"
+        description="The core problem/gap this work tackles. Max 3 sentences, ~60 words."
     )
     main_idea: str = Field(
-        description="Main ideas and approaches that the authors propose"
+        description="The core approach/method proposed. Max 4 sentences, ~90 words."
     )
     main_results: str = Field(
-        description="Key findings or performance metrics"
+        description="Key findings or metrics. Max 5 short bullet points, one line each."
     )
     conclusion_future_works: str = Field(
-        description="Final message and future research directions"
+        description="Conclusion and future directions. Max 3 sentences, ~60 words."
     )
     publish_papers: List[str] = Field(
-        description="List of exactly 3 research direction ideas"
+        description="Exactly 3 concise research-direction ideas, each 1-2 sentences."
     )
     patent_ideas: List[str] = Field(
-        description="List of exactly 3 patent ideas focused on practical applications, especially for mobile phones"
+        description="Exactly 3 concise practical/patent ideas (mobile-focused), each 1-2 sentences."
     )
 
 
@@ -72,17 +72,36 @@ def summarize_paper(paper_info, text, llm_instance=None):
     """
     # Create the prompt template
     prompt_template = ChatPromptTemplate.from_messages([
-        ("system", """You are a helpful assistant that summarizes research papers accurately and concisely.
+        ("system", """You are a helpful assistant that summarizes research papers.
+
+Your job is to DISTILL the paper into its essential points in concise Vietnamese —
+NOT to translate it, NOT to paraphrase it at length, and NOT to reproduce the
+source text. A reader must grasp what the paper does and why it matters in under
+two minutes. Restate ideas in your own words; never copy or translate sentences
+from the paper.
+
 You must respond with structured data following the provided schema.
 
-Guidelines:
-- All content should be based on the extracted text only
-- Use Vietnamese language for all fields except tags and some Technical Name, ex: Vision-Language Action not Thị giác-Ngôn ngữ-Hành động.
-- Tags should be common AI/ML keywords (e.g., RAG, Diffusion, GAN, LLMs, etc.)
-- Patent ideas should focus on practical applications, especially for mobile phones
-- Patent ideas should explain concepts clearly without using technical abbreviations from the paper
-- Provide exactly 3 research directions and 3 patent ideas
-- The value of each field should be in Markdown format that is used to fill into the template (do not recreate the headings like ### I. Main Problem, ### II. Main Idea,...)"""),
+LENGTH BUDGET (hard limits — exceeding them wastes tokens and causes the output
+to be truncated and discarded):
+- tags: 3-8 short keywords.
+- main_problem: max 3 sentences (~60 words). Just the gap/problem.
+- main_idea: max 4 sentences (~90 words). Just the core approach/method.
+- main_results: max 5 short bullet points, one line each (key findings/numbers).
+- conclusion_future_works: max 3 sentences (~60 words).
+- publish_papers: exactly 3 ideas, each 1-2 sentences.
+- patent_ideas: exactly 3 ideas, each 1-2 sentences.
+- Keep the TOTAL output under ~1,200 Vietnamese words (~2,500 tokens).
+
+CONTENT RULES:
+- Base everything on the extracted text only.
+- Use Vietnamese for all fields, EXCEPT keep technical names in English (e.g.,
+  "Vision-Language Action", not "Thị giác-Ngôn ngữ-Hành động").
+- Tags = common AI/ML keywords (e.g., RAG, Diffusion, GAN, LLMs).
+- Patent ideas: practical applications, especially mobile phones; explain without
+  the paper's abbreviations.
+- Each field value is Markdown to drop into the template; do NOT recreate the
+  headings (### I. Main Problem, ### II. Main Idea, ...)."""),
         ("human", """Please summarize the following research paper based on the title and extracted text.
 
 Title: {title}
