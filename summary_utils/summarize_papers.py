@@ -4,6 +4,7 @@ import re
 import pypdf
 import json
 import logging
+from datetime import datetime
 from typing import List
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
@@ -58,6 +59,66 @@ class PaperSummary(BaseModel):
     patent_ideas: List[str] = Field(
         description="Exactly 3 concise practical/patent ideas (mobile-focused), each 1-2 sentences."
     )
+
+
+# Per-paper raw-output dumps for debugging verbosity / parse failures.
+# Each summarization attempt appends to logs/debug_summaries/<paper_id>.md.
+DEBUG_SUMMARY_DIR = os.path.join("logs", "debug_summaries")
+
+
+def _dump_summary_debug(paper_info, raw_result):
+    """Append the model output for one summarization attempt to a debug md file.
+
+    On a successful parse, writes the rendered summary (the readable result).
+    On a parse failure (e.g. the model over-generated and hit the length limit,
+    or returned an empty response), writes the raw model output + token usage so
+    we can see exactly what the model produced instead of only the error.
+
+    Never raises — debugging must not break the pipeline.
+    """
+    try:
+        os.makedirs(DEBUG_SUMMARY_DIR, exist_ok=True)
+        raw = raw_result.get("raw")
+        parsed = raw_result.get("parsed")
+        err = raw_result.get("parsing_error")
+
+        if parsed is not None:
+            label = "### Rendered summary (parsed OK)"
+            body = generate_markdown_from_summary(parsed.model_dump(), paper_info)
+        else:
+            label = "### Raw model output (PARSE FAILED)"
+            chunks = []
+            if raw is not None:
+                content = getattr(raw, "content", None)
+                if content:
+                    chunks.append(str(content))
+                for tc in getattr(raw, "tool_calls", []) or []:
+                    args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", None)
+                    if args is not None:
+                        chunks.append(json.dumps(args, ensure_ascii=False, indent=2))
+            body = "\n\n".join(chunks) if chunks else "(empty response)"
+
+        meta = getattr(raw, "response_metadata", {}) if raw else {}
+        usage = (meta.get("token_usage") or {}) if isinstance(meta, dict) else {}
+
+        header = (
+            f"## {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} — attempt\n"
+            f"- paper: `{paper_info.get('id')}` — {paper_info.get('title', '')}\n"
+            f"- status: {'PARSED OK' if parsed else 'PARSE FAILED'}\n"
+            f"- tokens: prompt={usage.get('prompt_tokens')} "
+            f"completion={usage.get('completion_tokens')} "
+            f"total={usage.get('total_tokens')}\n"
+            f"- output_chars: {len(body)}\n"
+        )
+        if err:
+            header += f"- parsing_error: {err}\n"
+        header += f"\n{label}\n\n"
+
+        path = os.path.join(DEBUG_SUMMARY_DIR, f"{paper_info.get('id')}.md")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(header + body + "\n\n---\n\n")
+    except Exception as e:  # noqa: BLE001 — debugging must never break the run
+        logger.debug(f"debug dump failed for {paper_info.get('id')}: {e}")
 
 
 def summarize_paper(paper_info, text, llm_instance=None):
@@ -134,25 +195,38 @@ Please provide a structured summary following the schema.""")
     try:
         # Initialize LLM
         llm = llm_instance if llm_instance is not None else get_llm()
-        
-        # Create structured output chain with Pydantic model
-        structured_llm = llm.with_structured_output(PaperSummary)
-        
+
+        # include_raw=True keeps the raw AIMessage even when the model
+        # over-generates and JSON parsing fails, so we can inspect what it
+        # actually produced (dumped to logs/debug_summaries/).
+        structured_llm = llm.with_structured_output(PaperSummary, include_raw=True)
+
         # Create the chain
         chain = prompt_template | structured_llm
-        
+
         # Clean text - remove problematic unicode characters
         clean_text = text[:50000].replace('\ud835', '')
-        
+
         # Invoke the chain
-        result = chain.invoke({
+        raw_result = chain.invoke({
             "title": paper_info['title'],
             "text": clean_text
         })
-        
+
+        # Always dump the attempt (success or failure) for inspection.
+        _dump_summary_debug(paper_info, raw_result)
+
+        parsed = raw_result.get("parsed")
+        if parsed is None:
+            logger.error(
+                f"Error summarizing paper {paper_info['id']}: "
+                f"{raw_result.get('parsing_error')}"
+            )
+            return None
+
         # Convert Pydantic model to dict for backward compatibility
-        return _sanitize_summary(result.model_dump())
-        
+        return _sanitize_summary(parsed.model_dump())
+
     except Exception as e:
         logger.error(f"Error summarizing paper {paper_info['id']}: {e}")
         return None
