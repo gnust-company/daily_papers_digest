@@ -1,47 +1,16 @@
 import React from 'react';
-import Link from '@docusaurus/Link';
+import {Redirect} from '@docusaurus/router';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
-import Layout from '@theme/Layout';
-import Heading from '@theme/Heading';
 
+// The site root has no standalone landing page: visiting
+// https://gnust-company.github.io/daily_papers_digest/ sends the reader
+// straight to the newest digest (route computed at build time in
+// docusaurus.config.js and exposed via customFields.latestDigestRoute).
+// To restore a real homepage later (CV / blog / project showcase), replace
+// this redirect with page content again.
 export default function Home() {
   const {siteConfig} = useDocusaurusContext();
   const latestDigestRoute =
     siteConfig.customFields?.latestDigestRoute || '/docs';
-  return (
-    <Layout title={`${siteConfig.title}`} description={siteConfig.tagline}>
-      <main
-        style={{
-          maxWidth: 'var(--ifm-container-width)',
-          margin: '0 auto',
-          padding: '4rem 1rem',
-          textAlign: 'center',
-        }}>
-        <Heading as="h1" style={{fontSize: '2.75rem'}}>
-          {siteConfig.title}
-        </Heading>
-        <p style={{fontSize: '1.3rem', opacity: 0.85}}>{siteConfig.tagline}</p>
-        <p style={{opacity: 0.7, marginTop: '1rem'}}>
-          Kho lưu trữ các bản tóm tắt bài báo, sắp xếp theo{' '}
-          <strong>Năm → Tháng → Ngày</strong>.
-        </p>
-        <div
-          style={{
-            display: 'flex',
-            gap: '1rem',
-            justifyContent: 'center',
-            marginTop: '2.5rem',
-          }}>
-          <Link
-            className="button button--primary button--lg"
-            to={latestDigestRoute}>
-            Xem digest mới nhất
-          </Link>
-          <Link className="button button--secondary button--lg" to="/blog">
-            Blog
-          </Link>
-        </div>
-      </main>
-    </Layout>
-  );
+  return <Redirect to={latestDigestRoute} />;
 }
