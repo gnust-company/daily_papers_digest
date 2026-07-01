@@ -460,7 +460,11 @@ def retry_failed_node(state: DigestState) -> dict:
     retry_count += 1
     logger.info(f"Retry attempt {retry_count}: re-processing {len(failed_papers)} failed papers")
 
-    llm = get_llm(temperature=0.9)
+    # Use the model's default temperature. Some models (e.g. the thinking
+    # variants like kimi-k2.6) reject any temperature other than 1 with a 400
+    # "only 1 is allowed for this model" — which used to make EVERY retry fail
+    # and, combined with the summaries reducer, wipe the whole day's digest.
+    llm = get_llm()
 
     for paper in failed_papers:
         text = paper.get("_extracted_text", "")
@@ -489,8 +493,16 @@ def retry_failed_node(state: DigestState) -> dict:
         f"Retry attempt {retry_count}: {len(new_summaries)} succeeded, {len(still_failed)} still failing"
     )
 
-    return {
-        "summaries": new_summaries,
+    update = {
         "failed_papers": still_failed,
         "retry_count": retry_count,
     }
+    # Only write `summaries` when we actually rescued at least one paper.
+    # Emitting an empty list here would run the summaries_reducer, whose empty
+    # branch (an empty set is a subset of everything) REPLACES the field with
+    # [] — wiping every already-validated summary from this run and producing
+    # an empty digest. Omitting the key entirely means LangGraph skips the
+    # reducer for `summaries`, leaving the accumulated good ones intact.
+    if new_summaries:
+        update["summaries"] = new_summaries
+    return update

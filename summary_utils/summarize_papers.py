@@ -14,6 +14,69 @@ logger = logging.getLogger(__name__)
 # Control chars 0x00-0x1F except normal whitespace (0x20)
 _CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
 
+# The template emits a section title around each field ("### I. Main Problem",
+# "#### 1. Publish Papers", ...). A field VALUE must never re-echo one of those
+# titles — the template would then render it twice (the duplicated
+# "### II. Main Idea" / "**Main Problem:**" the digests show). The model leaks
+# the title in two shapes:
+#   - a markdown heading at template level (1-3 '#'); '####'+ nests fine, so
+#     it is allowed and the model may still use it to structure a value.
+#   - a standalone bold label line, e.g. "**Main Problem:**".
+# Both are stripped below. '-'/'1.' bullet lists are always allowed.
+_BANNED_HEADING_RE = re.compile(r'^[ \t]{0,3}#{1,3}[ \t]')
+_BOLD_LABEL_RE = re.compile(r'^[ \t]*\*\*[^*\n]{1,40}\*\*:?[ \t]*$')
+
+
+def _is_leaked_label_line(line: str) -> bool:
+    """A line that is a template-level heading OR a standalone bold section label."""
+    return bool(_BANNED_HEADING_RE.match(line) or _BOLD_LABEL_RE.match(line))
+
+
+def _field_has_leaked_label(value: str) -> bool:
+    """True if any line in `value` re-echoes a section title (heading or bold)."""
+    if not isinstance(value, str):
+        return False
+    return any(_is_leaked_label_line(line) for line in value.split('\n'))
+
+
+def _summary_has_leaked_label(summary: dict) -> bool:
+    """True if any scalar field re-echoes a section title. Drives the retry."""
+    return any(
+        _field_has_leaked_label(v) for v in summary.values() if isinstance(v, str)
+    )
+
+
+def _normalize_field_headings(value: str) -> str:
+    """Last-resort cleanup so a value is safe to drop under the template title.
+
+    - A leaked label at the START of the value (before any real content) is
+      dropped — that is the duplicated-section-title bug (heading or bold).
+    - A heading leaked mid-value is DEMOTED to '####' so it nests below the
+      section instead of colliding with it (preserves the content). A bold
+      label leaked mid-value is left as-is (rare; may be legitimate emphasis).
+    - '####'+ headings and bullet lists are always left untouched.
+    """
+    if not isinstance(value, str):
+        return value
+    out = []
+    started = False  # have we passed the first non-blank content line?
+    for line in value.split('\n'):
+        if _BOLD_LABEL_RE.match(line):
+            if not started:
+                continue  # leading bold label -> drop
+            started = True
+            out.append(line)
+        elif _BANNED_HEADING_RE.match(line):
+            if not started:
+                continue  # leading heading -> drop
+            out.append(re.sub(r'^([ \t]{0,3})#{1,3}([ \t])', r'\1####\2', line))  # demote
+            started = True
+        else:
+            if line.strip() != '':
+                started = True
+            out.append(line)
+    return '\n'.join(out).lstrip('\n')
+
 
 def _sanitize_text(text: str) -> str:
     """Remove control characters that corrupt LaTeX (e.g. \\r in \\rightarrow)."""
@@ -23,10 +86,16 @@ def _sanitize_text(text: str) -> str:
 
 
 def _sanitize_summary(summary: dict) -> dict:
-    """Clean all string fields in a summary dict."""
+    """Clean all string fields in a summary dict.
+
+    Also normalizes template-level headings the model leaked into the scalar
+    Markdown fields (see _normalize_field_headings). List fields (tags,
+    publish_papers, patent_ideas) are item-level and never carry a heading, so
+    they only get control-char cleaning.
+    """
     for key, value in summary.items():
         if isinstance(value, str):
-            summary[key] = _sanitize_text(value)
+            summary[key] = _normalize_field_headings(_sanitize_text(value))
         elif isinstance(value, list):
             summary[key] = [_sanitize_text(v) if isinstance(v, str) else v for v in value]
     return summary
@@ -161,8 +230,15 @@ CONTENT RULES:
 - Tags = common AI/ML keywords (e.g., RAG, Diffusion, GAN, LLMs).
 - Patent ideas: practical applications, especially mobile phones; explain without
   the paper's abbreviations.
-- Each field value is Markdown to drop into the template; do NOT recreate the
-  headings (### I. Main Problem, ### II. Main Idea, ...)."""),
+
+HEADING RULE (critical — the renderer adds section titles for you):
+- Each field's value is ONLY that field's body content. The "### I. Main
+  Problem", "### II. Main Idea", ... section titles are added automatically
+  around your values — do NOT repeat them inside the value.
+- Inside a value you MUST NOT use a level-1, level-2 or level-3 Markdown
+  heading ("# ...", "## ...", "### ..."). Those collide with the section
+  titles. If you want internal structure, use "####" or deeper, or bullet
+  ("- ...") / numbered ("1. ...") lists instead."""),
         ("human", """Please summarize the following research paper based on the title and extracted text.
 
 Title: {title}
@@ -170,28 +246,33 @@ Title: {title}
 Extracted text (first few pages):
 {text}
 
-My template for the summary is as follows:
-```markdown
-**Tag:**
+Return your answer as the structured schema. Each field's value is plain
+Markdown body — no "#", "##" or "### " headings inside it. Here is a complete
+example of well-formed field values (content is illustrative only):
 
-### I. Main Problem:
-
-### II. Main Idea:
-
-### III. Main Results:
-
-### IV. Conclusion & Future Works:
-
-### V. Brainstorming Space:
-
-#### 1. Publish Papers:
-
-#### 2. Patent:
+```json
+{{
+  "tags": ["Vision-Language-Action", "Robotics", "In-Context Learning", "World Modeling"],
+  "main_problem": "Các mô hình Vision-Language-Action hiện đại thường thất bại khi triển khai trong thiết lập mới—góc camera lạ hoặc hình thái robot khác—vì chỉ điều kiện hóa trên quan sát hiện tại và chỉ dẫn ngôn ngữ, bỏ qua biến cấu hình hệ thống. Điều này khiến hiệu suất sụt giảm và buộc fine-tuning tốn kém cho mỗi hoàn cảnh mới.",
+  "main_idea": "In-Context World Modeling (ICWM) định khung nhận diện hệ thống như bài toán thích ứng in-context: robot tự thực hiện chuỗi ngắn động tác khám phá ngẫu nhiên, ghi lại chuyển tiếp trực quan, rồi nối vào context window để Transformer ngầm suy luận động lực học. Khác In-Context Learning truyền thống, cách này dùng context để hiểu hệ thống vận hành thế nào, cho phép điều chỉnh chính sách mà không cập nhật tham số.",
+  "main_results": "- Trên LIBERO, ICWM vượt Multi-View BC +13.0% trên góc nhìn OOD.\\n- Tác vụ long-horizon hưởng lợi lớn nhất: +26.3% trên góc nhìn lạ.\\n- Robot UR5e thật: ICWM giữ hiệu suất cao khi chính sách chuẩn sụt từ 68% xuống 17%.\\n- Ablation: thiếu ảnh kết quả trong context làm sụt 56.4% hiệu suất.",
+  "conclusion_future_works": "ICWM khắc phục điểm yếu khái quát hóa bằng cách chuyển cửa sổ context từ định nghĩa hành vi sang nhận diện hệ thống, cho phép tự hiệu chỉnh tại test-time không cần cập nhật tham số. Hướng tương lai: tối ưu chiến lược thăm dò chủ động và mở rộng cho môi trường động liên tục.",
+  "publish_papers": [
+    "Mở rộng nhận diện hệ thống in-context cho điều khiển đa robot, mỗi tác nhân dùng chuỗi tương tác tự sinh để đồng thời ước lượng động lực học bản thân và đối tác.",
+    "Kết hợp world modeling ngầm với active learning để robot tự chọn động tác thăm dò thông tin nhất thay vì ngẫu nhiên.",
+    "Áp dụng tư tưởng thăm dò-tương tác-suy luận cho xe tự hành để ngầm hiệu chỉnh mô hình động lực học trong điều kiện đường mới."
+  ],
+  "patent_ideas": [
+    "Hệ thống tự hiệu chuẩn cánh tay robot công nghiệp: trước mỗi ca, robot thực hiện vài động tác thăm dò; camera ghi lại và mô hình suy luận tư thế camera + độ lệch động học để chỉnh chính sách ngay lần chạy đầu.",
+    "Điều khiển robot gia đình qua điện thoại với camera tùy ý: người dùng đặt điện thoại bất kỳ; robot chuyển động thử ngắn, gửi video lên đám mây để phân tích tương quan không gian rồi thực hiện lệnh theo góc nhìn đó.",
+    "Module nhận diện thay đổi phụ kiện cho robot lắp ráp: khi đổi đầu kẹp, robot chạy chương trình thăm dò ngắn để xác định độ dài tay và độ mở kẹp mới qua luồng hình ảnh, cập nhật tham số động lực học ẩn."
+  ]
+}}
 ```
 
-Please provide a structured summary following the schema.""")
+Now produce the structured summary for the paper above.""")
     ])
-    
+
     try:
         # Initialize LLM
         llm = llm_instance if llm_instance is not None else get_llm()
@@ -207,24 +288,48 @@ Please provide a structured summary following the schema.""")
         # Clean text - remove problematic unicode characters
         clean_text = text[:50000].replace('\ud835', '')
 
-        # Invoke the chain
-        raw_result = chain.invoke({
-            "title": paper_info['title'],
-            "text": clean_text
-        })
+        inputs = {"title": paper_info['title'], "text": clean_text}
 
-        # Always dump the attempt (success or failure) for inspection.
-        _dump_summary_debug(paper_info, raw_result)
+        # One full call, plus at most ONE retry when the model leaked a section
+        # title (#/##/### heading or a "**Main Problem:**" bold label) into a
+        # field. A retry is a full ~50k-char call, so we cap it at 1; if the
+        # retry is still dirty we fall through to _sanitize_summary, which
+        # normalizes the leaked labels (drop/demote) so the paper is never
+        # dropped just for a stray label.
+        parsed = None
+        for attempt in range(2):  # 0 = first try, 1 = single retry
+            raw_result = chain.invoke(inputs)
 
-        parsed = raw_result.get("parsed")
-        if parsed is None:
-            logger.error(
-                f"Error summarizing paper {paper_info['id']}: "
-                f"{raw_result.get('parsing_error')}"
-            )
-            return None
+            # Per-attempt dumps are off by default — set SUMMARY_DEBUG=true to
+            # inspect exactly what the model returned (useful when diagnosing
+            # parse failures or leaks).
+            if os.getenv("SUMMARY_DEBUG", "").lower() == "true":
+                _dump_summary_debug(paper_info, raw_result)
 
-        # Convert Pydantic model to dict for backward compatibility
+            parsed = raw_result.get("parsed")
+            if parsed is None:
+                logger.error(
+                    f"Error summarizing paper {paper_info['id']}: "
+                    f"{raw_result.get('parsing_error')}"
+                )
+                return None
+
+            if not _summary_has_leaked_label(parsed.model_dump()):
+                break  # clean output — accept it
+
+            if attempt == 0:
+                logger.warning(
+                    f"Paper {paper_info['id']}: model leaked a section title into "
+                    f"a field; retrying once."
+                )
+            else:
+                logger.warning(
+                    f"Paper {paper_info['id']}: section title still present after "
+                    f"retry; normalizing and accepting."
+                )
+
+        # Convert Pydantic model to dict; _sanitize_summary normalizes any
+        # remaining template-level headings so the rendered digest stays clean.
         return _sanitize_summary(parsed.model_dump())
 
     except Exception as e:
