@@ -40,13 +40,16 @@ logging.basicConfig(
         logging.FileHandler('logs/backfill.log', encoding='utf-8'),
     ],
 )
+# Silence the per-paper "HTTP Request: POST .../chat/completions 200 OK" line
+# that httpx emits on every LLM call — one per paper, pure noise in the log.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Imported after logging is configured so its log lines are captured.
 from daily_papers_tool import run_daily_digest  # noqa: E402
 
 # Default range: the gap left by the paused scheduler.
-DEFAULT_START = "2026-05-30"
+DEFAULT_START = "2026-06-02"
 DEFAULT_END = "2026-06-26"
 
 
@@ -62,7 +65,7 @@ def main():
         description="Backfill daily digests over a date range (force update)."
     )
     parser.add_argument("--start", type=str, default=DEFAULT_START,
-                        help="Start date YYYY-MM-DD (default: 2026-05-30)")
+                        help="Start date YYYY-MM-DD (default: 2026-06-02)")
     parser.add_argument("--end", type=str, default=DEFAULT_END,
                         help="End date YYYY-MM-DD inclusive (default: 2026-06-26)")
     parser.add_argument("--model", type=str, default=None,

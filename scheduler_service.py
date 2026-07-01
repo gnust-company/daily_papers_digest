@@ -33,6 +33,9 @@ logging.basicConfig(
         logging.FileHandler('logs/scheduler.log', encoding='utf-8')
     ]
 )
+# Silence the per-paper "HTTP Request: POST .../chat/completions 200 OK" line
+# that httpx emits on every LLM call — one per paper, pure noise in the log.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
