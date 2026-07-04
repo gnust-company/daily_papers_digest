@@ -212,6 +212,15 @@ from the paper.
 
 You must respond with structured data following the provided schema.
 
+OUTPUT FORMAT (critical):
+- Respond with ONLY the structured schema — no preamble, no reasoning, no
+  conversational text, no markdown code fence. Some models (e.g. DeepSeek)
+  tend to emit reasoning prose (like "We analyze...") before the JSON object;
+  do NOT do that. The very first character of your response must be the
+  opening brace of the structured object. Any leading text will cause the
+  parser to reject the entire response and the paper will be silently dropped.
+- Do not wrap the object in ```json fences. Output the raw object only.
+
 LENGTH BUDGET (hard limits — exceeding them wastes tokens and causes the output
 to be truncated and discarded):
 - tags: 3-8 short keywords.
@@ -246,11 +255,12 @@ Title: {title}
 Extracted text (first few pages):
 {text}
 
-Return your answer as the structured schema. Each field's value is plain
-Markdown body — no "#", "##" or "### " headings inside it. Here is a complete
-example of well-formed field values (content is illustrative only):
+Return your answer as the structured schema ONLY. The first character of your
+response must be the opening brace — no prose, no "```json" fence, nothing else.
+Each field's value is plain Markdown body — no "#", "##" or "### " headings
+inside it. Here is a complete example of well-formed field values (content is
+illustrative only):
 
-```json
 {{
   "tags": ["Vision-Language-Action", "Robotics", "In-Context Learning", "World Modeling"],
   "main_problem": "Các mô hình Vision-Language-Action hiện đại thường thất bại khi triển khai trong thiết lập mới—góc camera lạ hoặc hình thái robot khác—vì chỉ điều kiện hóa trên quan sát hiện tại và chỉ dẫn ngôn ngữ, bỏ qua biến cấu hình hệ thống. Điều này khiến hiệu suất sụt giảm và buộc fine-tuning tốn kém cho mỗi hoàn cảnh mới.",
@@ -268,9 +278,10 @@ example of well-formed field values (content is illustrative only):
     "Module nhận diện thay đổi phụ kiện cho robot lắp ráp: khi đổi đầu kẹp, robot chạy chương trình thăm dò ngắn để xác định độ dài tay và độ mở kẹp mới qua luồng hình ảnh, cập nhật tham số động lực học ẩn."
   ]
 }}
-```
 
-Now produce the structured summary for the paper above.""")
+Now produce the structured summary for the paper above. Remember: your
+response must start with the opening brace of the structured object — no
+preamble, no code fence, no reasoning.""")
     ])
 
     try:
