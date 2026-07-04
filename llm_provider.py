@@ -6,20 +6,21 @@ from dotenv import load_dotenv
 
 load_dotenv(override=False)
 
+import httpx
 from langchain_openai import ChatOpenAI
 
 
 def get_llm(model: str = None, temperature: float = 1) -> ChatOpenAI:
     """
     Initialize and return a ChatOpenAI instance configured for NVIDIA NIM.
-    
+
     Args:
         model: Model ID (defaults to LLM_MODEL env var or google/gemma-4-31b-it)
         temperature: Sampling temperature
-        
+
     Returns:
         ChatOpenAI instance
-        
+
     Raises:
         ValueError: If NVIDIA_API_KEY is missing or empty
     """
@@ -28,7 +29,7 @@ def get_llm(model: str = None, temperature: float = 1) -> ChatOpenAI:
         raise ValueError(
             "NVIDIA_API_KEY environment variable is required. Get one at build.nvidia.com"
         )
-    
+
     model_name = model or os.getenv("LLM_MODEL", "moonshotai/kimi-k2.5")
     base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
 
@@ -41,11 +42,24 @@ def get_llm(model: str = None, temperature: float = 1) -> ChatOpenAI:
     max_tokens_raw = os.getenv("LLM_MAX_TOKENS", "8192").strip()
     max_tokens = int(max_tokens_raw) if max_tokens_raw else 8192
 
+    # Explicit request timeout + SDK-level retries. Without these the openai
+    # SDK falls back to a 600s per-request timeout with 2 retries, so a stalled
+    # (or NIM-gateway-timed-out) request blocks the worker for ~5 minutes per
+    # attempt before any retry — which is what produced the steady cadence of
+    # 504s in the scheduler. A 300s ceiling lets us fail fast and hand control
+    # back to the graph's own retry loop. Override either via .env.
+    request_timeout_raw = os.getenv("LLM_REQUEST_TIMEOUT", "300").strip()
+    request_timeout = float(request_timeout_raw) if request_timeout_raw else 300.0
+    max_retries_raw = os.getenv("LLM_MAX_RETRIES", "3").strip()
+    max_retries = int(max_retries_raw) if max_retries_raw else 3
+
     llm = ChatOpenAI(
         model=model_name,
         api_key=api_key,
         base_url=base_url,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout=httpx.Timeout(request_timeout, connect=10.0),
+        max_retries=max_retries,
     )
     return llm

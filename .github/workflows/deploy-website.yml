@@ -4,14 +4,18 @@ name: Deploy website to GitHub Pages
 #
 # Content flow:
 #   Your machine: run digest -> push .md to MinIO -> trigger THIS workflow
-#   (via repository_dispatch). THIS workflow pulls the .md from MinIO into
-#   ./summaries, builds, and deploys to Pages.
+#   (via workflow_dispatch from trigger_deploy.py). THIS workflow pulls the
+#   .md from MinIO into ./summaries, builds, and deploys to Pages.
 #
 # This workflow never touches Postgres or the LLM — it only reads .md from MinIO.
 #
 # To trigger from your machine after a digest run:
 #   python trigger_deploy.py        (see that script), or
 #   scripts/trigger_deploy.sh
+#
+# We use workflow_dispatch (not repository_dispatch) because of
+# actions/deploy-pages#383: repeated repository_dispatch runs against the same
+# commit SHA silently keep the old Pages artifact, so the site never updates.
 #
 # Required repository secrets (Settings -> Secrets and variables -> Actions):
 #   MINIO_ENDPOINT   e.g. minio-api.smartsolar.io.vn  (host only, no scheme)
@@ -22,13 +26,9 @@ name: Deploy website to GitHub Pages
 #   MINIO_SECURE     'true' (default) for https, 'false' for http
 
 on:
-  # 1) Triggered from your machine after a digest run completes. This is the
-  #    ONLY automatic trigger — the website rebuilds when content changes, not
-  #    on a cron or on every UI-code push.
-  repository_dispatch:
-    types: [digest-updated]
-  # 2) Manual "Run workflow" button (use this when you change website code and
-  #    want a rebuild, since pushes no longer trigger it automatically).
+  # Triggered from your machine after a digest run completes
+  # (trigger_deploy.py calls the workflow_dispatch API), or via the GitHub UI
+  # "Run workflow" button when you change website code and want a rebuild.
   workflow_dispatch: {}
 
 # Allow this workflow to publish to Pages.

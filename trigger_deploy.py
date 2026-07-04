@@ -1,17 +1,23 @@
 """Trigger the GitHub Pages deploy workflow after a digest run.
 
-Sends a `repository_dispatch` event (type: digest-updated) to GitHub, which
-starts .github/workflows/deploy-website.yml. That workflow pulls the latest
-digests from MinIO, builds the Docusaurus site, and deploys to GitHub Pages.
+Sends a `workflow_dispatch` event to start .github/workflows/deploy-website.yml.
+That workflow pulls the latest digests from MinIO, builds the Docusaurus site,
+and deploys to GitHub Pages.
 
 This is the bridge between the two crons:
     your machine (digest) ---trigger--> GitHub (build + deploy web)
 
+We use `workflow_dispatch` (not `repository_dispatch`) deliberately:
+`actions/deploy-pages` has a known bug (actions/deploy-pages#383) where repeated
+`repository_dispatch` runs against the same commit SHA silently keep the old
+artifact — the deploy reports success but the live site never updates.
+`workflow_dispatch` does not have this issue.
+
 Environment variables (add to .env):
-    GITHUB_TOKEN  A fine-grained PAT with "Contents: read" + "Metadata: read"
-                  is NOT enough — repository_dispatch needs the classic scope
-                  `repo`, or a fine-grained token with "Contents: write".
+    GITHUB_TOKEN  A classic PAT with `repo` scope, or a fine-grained PAT with
+                  "Actions: write" + "Contents: read" + "Metadata: read".
     GITHUB_REPO   owner/repo, e.g. gnust-company/daily_papers_digest
+    GITHUB_REF    Branch the workflow runs on (default: main)
 
 Usage:
     python trigger_deploy.py
@@ -32,13 +38,23 @@ load_dotenv(override=False)
 def trigger_deploy() -> bool:
     token = os.getenv("GITHUB_TOKEN")
     repo = os.getenv("GITHUB_REPO", "gnust-company/daily_papers_digest")
+    ref = os.getenv("GITHUB_REF", "main")
 
     if not token:
         print("[trigger_deploy] GITHUB_TOKEN not set; skipping deploy trigger.")
         return False
 
-    url = f"https://api.github.com/repos/{repo}/dispatches"
-    payload = json.dumps({"event_type": "digest-updated"}).encode("utf-8")
+    # workflow_dispatch endpoint: triggers .github/workflows/deploy-website.yml
+    # on the configured branch. We use workflow_dispatch instead of
+    # repository_dispatch because of actions/deploy-pages#383: repeated
+    # repository_dispatch runs against the same commit SHA silently keep the
+    # old Pages artifact, so the site never updates even though deploy reports
+    # success.
+    url = (
+        f"https://api.github.com/repos/{repo}/actions/workflows/"
+        f"deploy-website.yml/dispatches"
+    )
+    payload = json.dumps({"ref": ref}).encode("utf-8")
     req = urllib.request.Request(url, data=payload, method="POST")
     req.add_header("Accept", "application/vnd.github+json")
     req.add_header("Authorization", f"Bearer {token}")

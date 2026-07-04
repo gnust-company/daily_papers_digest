@@ -19,8 +19,13 @@ services:
       - ./papers:/app/papers
       # Optional: Persist database if using SQLite (not recommended for production)
       # - ./database:/app/database
-    networks:
-      - daily-papers-network
+    # Use the host network directly. The scheduler makes long-lived HTTPS POSTs
+    # to NVIDIA NIM (very large LLM prompts), which stall and 504 under Docker's
+    # default bridge NAT. Host networking matches how the standalone script runs
+    # and removes the NAT/MTU layer between the container and the LLM endpoint.
+    # Note: network_mode: host is mutually exclusive with `networks:` and port
+    # mappings, and is Linux-only (on macOS/Windows it falls back to the VM).
+    network_mode: host
     # Health check to ensure service is running
     healthcheck:
       test: ["CMD", "python", "-c", "import os; exit(0) if os.path.exists('logs/scheduler.log') else exit(1)"]
@@ -33,7 +38,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-networks:
-  daily-papers-network:
-    driver: bridge
