@@ -111,22 +111,24 @@ class PaperSummary(BaseModel):
         description="3-8 short AI/ML keywords (e.g., RAG, Diffusion, GAN, LLMs)."
     )
     main_problem: str = Field(
-        description="The core problem/gap this work tackles. Max 3 sentences, ~60 words."
+        description="The core problem/gap this work tackles."
     )
     main_idea: str = Field(
-        description="The core approach/method proposed. Max 4 sentences, ~90 words."
+        description="The core approach/method proposed, ENDING with one everyday-life "
+                    "analogy (ví dụ đời thường) that mirrors how the method actually "
+                    "works, so a non-expert gets the intuition."
     )
     main_results: str = Field(
-        description="Key findings or metrics. Max 5 short bullet points, one line each."
+        description="Key findings or metrics, as short bullet points."
     )
     conclusion_future_works: str = Field(
-        description="Conclusion and future directions. Max 3 sentences, ~60 words."
+        description="Conclusion and future directions."
     )
     publish_papers: List[str] = Field(
-        description="Exactly 3 concise research-direction ideas, each 1-2 sentences."
+        description="Exactly 3 concise research-direction ideas."
     )
     patent_ideas: List[str] = Field(
-        description="Exactly 3 concise practical/patent ideas (mobile-focused), each 1-2 sentences."
+        description="Exactly 3 concise practical/patent ideas (mobile-focused)."
     )
 
 
@@ -221,24 +223,33 @@ OUTPUT FORMAT (critical):
   parser to reject the entire response and the paper will be silently dropped.
 - Do not wrap the object in ```json fences. Output the raw object only.
 
-LENGTH BUDGET (hard limits — exceeding them wastes tokens and causes the output
-to be truncated and discarded):
-- tags: 3-8 short keywords.
-- main_problem: max 3 sentences (~60 words). Just the gap/problem.
-- main_idea: max 4 sentences (~90 words). Just the core approach/method.
-- main_results: max 5 short bullet points, one line each (key findings/numbers).
-- conclusion_future_works: max 3 sentences (~60 words).
-- publish_papers: exactly 3 ideas, each 1-2 sentences.
-- patent_ideas: exactly 3 ideas, each 1-2 sentences.
-- Keep the TOTAL output under ~1,200 Vietnamese words (~2,500 tokens).
+LENGTH: There are NO per-field length caps — write each field as long as it
+needs to be clear and useful. Stay concise (this is a digest, not a re-tell),
+but do not pad. The TOTAL output must stay under ~2,500 tokens; exceeding that
+truncates the JSON and the whole response is discarded.
 
 CONTENT RULES:
 - Base everything on the extracted text only.
 - Use Vietnamese for all fields, EXCEPT keep technical names in English (e.g.,
   "Vision-Language Action", not "Thị giác-Ngôn ngữ-Hành động").
 - Tags = common AI/ML keywords (e.g., RAG, Diffusion, GAN, LLMs).
+- main_idea: describe the core approach FIRST, then END with one everyday-life
+  analogy (ví dụ đời thường) of the method's MECHANISM (how it works), not of
+  its topic — e.g. for an exploration-then-act robot, "giống như nhân viên mới
+  bấm thử vài nút để học cách máy chạy trước khi vận hành". Concrete and vivid.
 - Patent ideas: practical applications, especially mobile phones; explain without
   the paper's abbreviations.
+
+MARKDOWN FORMAT — every field value IS Markdown, not plain text:
+- Structure each field for SKIMMABILITY, not as one long prose wall. Use
+  **bold** for key terms, "- " bullets for enumerations/steps/components, and
+  short paragraphs to separate ideas.
+- Pick the layout that fits the content: bullets when there is a list of
+  distinct points; a short paragraph (with bold highlights) when prose reads
+  better. There is no fixed shape — use what makes that field clearest.
+- Use **bold** INLINE for emphasis only. Never write a standalone "**Label:**"
+  line — those collide with the renderer and get stripped.
+- The example below shows rich Markdown in action (main_problem, main_idea).
 
 HEADING RULE (critical — the renderer adds section titles for you):
 - Each field's value is ONLY that field's body content. The "### I. Main
@@ -257,16 +268,16 @@ Extracted text (first few pages):
 
 Return your answer as the structured schema ONLY. The first character of your
 response must be the opening brace — no prose, no "```json" fence, nothing else.
-Each field's value is plain Markdown body — no "#", "##" or "### " headings
-inside it. Here is a complete example of well-formed field values (content is
-illustrative only):
+Each field's value is Markdown body — structure it for skimmability (bold key
+terms, bullets), and never put "#", "##" or "### " headings inside it. Here is
+a complete example of well-formed field values (content is illustrative only):
 
 {{
   "tags": ["Vision-Language-Action", "Robotics", "In-Context Learning", "World Modeling"],
-  "main_problem": "Các mô hình Vision-Language-Action hiện đại thường thất bại khi triển khai trong thiết lập mới—góc camera lạ hoặc hình thái robot khác—vì chỉ điều kiện hóa trên quan sát hiện tại và chỉ dẫn ngôn ngữ, bỏ qua biến cấu hình hệ thống. Điều này khiến hiệu suất sụt giảm và buộc fine-tuning tốn kém cho mỗi hoàn cảnh mới.",
-  "main_idea": "In-Context World Modeling (ICWM) định khung nhận diện hệ thống như bài toán thích ứng in-context: robot tự thực hiện chuỗi ngắn động tác khám phá ngẫu nhiên, ghi lại chuyển tiếp trực quan, rồi nối vào context window để Transformer ngầm suy luận động lực học. Khác In-Context Learning truyền thống, cách này dùng context để hiểu hệ thống vận hành thế nào, cho phép điều chỉnh chính sách mà không cập nhật tham số.",
+  "main_problem": "Các mô hình Vision-Language-Action hiện đại **thất bại khi triển khai trong thiết lập mới** (góc camera lạ, hình thái robot khác) vì chỉ điều kiện hóa trên quan sát hiện tại và chỉ dẫn ngôn ngữ, bỏ qua biến cấu hình hệ thống. Hậu quả:\\n- hiệu suất sụt giảm mạnh trong hoàn cảnh mới\\n- buộc **fine-tuning tốn kém** cho từng thiết lập riêng biệt.",
+  "main_idea": "**In-Context World Modeling (ICWM)** định khung nhận diện hệ thống như bài toán thích ứng in-context. Quy trình:\\n- robot tự thực hiện chuỗi ngắn **động tác khám phá ngẫu nhiên**\\n- ghi lại các **chuyển tiếp trực quan**\\n- nối vào context window để Transformer **ngầm suy luận động lực học**\\n\\nKhác In-Context Learning truyền thống (dùng context để hiểu *hành vi*), ICWM dùng context để hiểu **hệ thống vận hành thế nào**, cho phép điều chỉnh chính sách mà không cập nhật tham số.\\n\\n**Ví dụ đời thường:** giống nhân viên mới thay vì đọc hướng dẫn, tự bấm thử vài nút và quan sát máy phản ứng để ngẩm hiểu cách nó chạy, rồi dùng được ngay.",
   "main_results": "- Trên LIBERO, ICWM vượt Multi-View BC +13.0% trên góc nhìn OOD.\\n- Tác vụ long-horizon hưởng lợi lớn nhất: +26.3% trên góc nhìn lạ.\\n- Robot UR5e thật: ICWM giữ hiệu suất cao khi chính sách chuẩn sụt từ 68% xuống 17%.\\n- Ablation: thiếu ảnh kết quả trong context làm sụt 56.4% hiệu suất.",
-  "conclusion_future_works": "ICWM khắc phục điểm yếu khái quát hóa bằng cách chuyển cửa sổ context từ định nghĩa hành vi sang nhận diện hệ thống, cho phép tự hiệu chỉnh tại test-time không cần cập nhật tham số. Hướng tương lai: tối ưu chiến lược thăm dò chủ động và mở rộng cho môi trường động liên tục.",
+  "conclusion_future_works": "ICWM khắc phục điểm yếu khái quát hóa bằng cách chuyển cửa sổ context từ **định nghĩa hành vi** sang **nhận diện hệ thống**, cho phép tự hiệu chỉnh tại test-time không cần cập nhật tham số. **Hướng tương lai:** tối ưu chiến lược thăm dò chủ động và mở rộng cho môi trường động liên tục.",
   "publish_papers": [
     "Mở rộng nhận diện hệ thống in-context cho điều khiển đa robot, mỗi tác nhân dùng chuỗi tương tác tự sinh để đồng thời ước lượng động lực học bản thân và đối tác.",
     "Kết hợp world modeling ngầm với active learning để robot tự chọn động tác thăm dò thông tin nhất thay vì ngẫu nhiên.",
