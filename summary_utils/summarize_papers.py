@@ -8,8 +8,21 @@ from datetime import datetime
 from typing import List
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.utils.json import parse_json_markdown
 
 logger = logging.getLogger(__name__)
+
+# Loaders used to rescue a JSON object the strict structured parser rejected,
+# cheapest/safest first (see _salvage_summary). json_repair is optional: it adds
+# recovery from trailing commas, single quotes and truncated JSON, but the
+# pipeline works without it.
+_JSON_LOADERS = [parse_json_markdown]
+try:
+    from json_repair import repair_json
+
+    _JSON_LOADERS.append(lambda s: json.loads(repair_json(s)))
+except ImportError:
+    pass
 
 # Control chars 0x00-0x1F except normal whitespace (0x20)
 _CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
@@ -33,10 +46,30 @@ def _is_leaked_label_line(line: str) -> bool:
 
 
 def _field_has_leaked_label(value: str) -> bool:
-    """True if any line in `value` re-echoes a section title (heading or bold)."""
+    """True if `value` contains a leak worth spending a retry on.
+
+    Mirrors what _normalize_field_headings actually changes, so we never burn a
+    full ~50k-char retry on something we would keep anyway:
+      - a banned heading (#/##/###) ANYWHERE -> it collides with the section
+        title and gets demoted, so a retry is worth trying.
+      - a bold label only when it LEADS the value (before any content) -> that
+        is the duplicated-section-title bug.
+    A bold label mid-value is legitimate structure ("**Hạn chế hiện tại:**"
+    introducing a list), is kept by the normalizer, and must not trigger a retry.
+    """
     if not isinstance(value, str):
         return False
-    return any(_is_leaked_label_line(line) for line in value.split('\n'))
+    started = False
+    for line in value.split('\n'):
+        if _BANNED_HEADING_RE.match(line):
+            return True
+        if _BOLD_LABEL_RE.match(line):
+            if not started:
+                return True
+            continue
+        if line.strip():
+            started = True
+    return False
 
 
 def _summary_has_leaked_label(summary: dict) -> bool:
@@ -192,6 +225,107 @@ def _dump_summary_debug(paper_info, raw_result):
         logger.debug(f"debug dump failed for {paper_info.get('id')}: {e}")
 
 
+def _raw_text_candidates(raw):
+    """Every string in a raw AIMessage that might hold the JSON object.
+
+    Depending on whether the model answered with a tool call or with plain
+    content, the object lands in a different place — try both.
+    """
+    if raw is None:
+        return []
+    out = []
+    content = getattr(raw, "content", None)
+    if isinstance(content, str) and content.strip():
+        out.append(content)
+    elif isinstance(content, list):  # multi-part content blocks
+        for block in content:
+            if isinstance(block, str):
+                out.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                out.append(block["text"])
+    for tc in getattr(raw, "tool_calls", []) or []:
+        args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", None)
+        if isinstance(args, str):
+            out.append(args)
+        elif isinstance(args, dict):
+            out.append(json.dumps(args, ensure_ascii=False))
+    return out
+
+
+def _salvage_summary(raw):
+    """Recover a PaperSummary from a raw response the structured parser rejected.
+
+    Some models (e.g. hermes-agent) ignore "no code fence" and answer with
+    ```json ... ``` — valid JSON wrapped in Markdown, which the strict parser
+    rejects at column 1 and which used to drop the paper entirely. Two rescue
+    layers, cheapest first (both are local — no extra LLM call):
+
+    1. parse_json_markdown (langchain_core): strips the fence / surrounding
+       prose and parses the object. Handles the fence case.
+    2. json_repair (optional dependency): also fixes trailing commas, single
+       quotes and truncated JSON. Skipped silently when not installed.
+
+    Returns a PaperSummary, or None when nothing usable can be recovered.
+    """
+    for candidate in _raw_text_candidates(raw):
+        for loader in _JSON_LOADERS:
+            try:
+                data = loader(candidate)
+            except Exception:  # noqa: BLE001 — try the next loader/candidate
+                continue
+            if not isinstance(data, dict):
+                continue
+            try:
+                return PaperSummary.model_validate(data)
+            except Exception:  # noqa: BLE001 — parsed but wrong shape
+                continue
+    return None
+
+
+# Models that turned out not to support with_structured_output (tool-calling).
+# Keyed by model name so the wasted strict call is paid once per process, not
+# once per paper — a strict call on a 50k-char prompt is expensive.
+_NO_STRUCTURED_OUTPUT = set()
+
+
+def _invoke_summary(llm, prompt_template, inputs):
+    """Run one summarization call. Returns a dict like include_raw's result.
+
+    The preferred path is with_structured_output (tool-calling): the server
+    enforces the schema, so it is the strictest and cleanest.
+
+    Some models served on NIM (e.g. hermes-agent) do not support it — they
+    ignore the schema and answer with a ```json fence. The openai SDK then
+    raises a ValidationError from inside its OWN parsing, before LangChain can
+    hand back include_raw's `raw`, so the response is lost and the paper gets
+    dropped. For those models we fall back to a plain call and parse the JSON
+    out of the text ourselves; the prompt already carries a full JSON example,
+    so the model still knows the exact shape.
+    """
+    model_name = getattr(llm, "model_name", None) or str(llm)
+
+    if model_name not in _NO_STRUCTURED_OUTPUT:
+        try:
+            structured = llm.with_structured_output(PaperSummary, include_raw=True)
+            return (prompt_template | structured).invoke(inputs)
+        except Exception as e:  # noqa: BLE001 — any failure means: use plain mode
+            _NO_STRUCTURED_OUTPUT.add(model_name)
+            logger.warning(
+                f"Model '{model_name}' does not support structured output "
+                f"({type(e).__name__}); falling back to plain-call JSON parsing "
+                f"for the rest of this run."
+            )
+
+    # Plain call: recover the object from the raw text.
+    raw = (prompt_template | llm).invoke(inputs)
+    parsed = _salvage_summary(raw)
+    return {
+        "raw": raw,
+        "parsed": parsed,
+        "parsing_error": None if parsed else "could not parse JSON from plain response",
+    }
+
+
 def summarize_paper(paper_info, text, llm_instance=None):
     """
     Summarizes a paper using LLM based on the extracted text.
@@ -299,14 +433,6 @@ preamble, no code fence, no reasoning.""")
         # Initialize LLM
         llm = llm_instance if llm_instance is not None else get_llm()
 
-        # include_raw=True keeps the raw AIMessage even when the model
-        # over-generates and JSON parsing fails, so we can inspect what it
-        # actually produced (dumped to logs/debug_summaries/).
-        structured_llm = llm.with_structured_output(PaperSummary, include_raw=True)
-
-        # Create the chain
-        chain = prompt_template | structured_llm
-
         # Clean text - remove problematic unicode characters
         clean_text = text[:50000].replace('\ud835', '')
 
@@ -320,7 +446,7 @@ preamble, no code fence, no reasoning.""")
         # dropped just for a stray label.
         parsed = None
         for attempt in range(2):  # 0 = first try, 1 = single retry
-            raw_result = chain.invoke(inputs)
+            raw_result = _invoke_summary(llm, prompt_template, inputs)
 
             # Per-attempt dumps are off by default — set SUMMARY_DEBUG=true to
             # inspect exactly what the model returned (useful when diagnosing
@@ -330,11 +456,22 @@ preamble, no code fence, no reasoning.""")
 
             parsed = raw_result.get("parsed")
             if parsed is None:
-                logger.error(
-                    f"Error summarizing paper {paper_info['id']}: "
-                    f"{raw_result.get('parsing_error')}"
+                # Last chance: the structured path can still hand back an
+                # unparsed response (e.g. a ```json fence that slipped past the
+                # server-side schema). Try to recover it locally before
+                # dropping the paper. In plain mode this was already attempted,
+                # so it simply returns None again.
+                parsed = _salvage_summary(raw_result.get("raw"))
+                if parsed is None:
+                    logger.error(
+                        f"Error summarizing paper {paper_info['id']}: "
+                        f"{raw_result.get('parsing_error')}"
+                    )
+                    return None
+                logger.warning(
+                    f"Paper {paper_info['id']}: strict parse failed; recovered "
+                    f"the JSON from the raw response."
                 )
-                return None
 
             if not _summary_has_leaked_label(parsed.model_dump()):
                 break  # clean output — accept it
