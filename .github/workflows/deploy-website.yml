@@ -49,16 +49,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install MinIO client (mc)
-        run: |
-          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc \
-            -o /usr/local/bin/mc
-          chmod +x /usr/local/bin/mc
-
       # Rolling cache of ./summaries across runs. The runner starts empty, so
       # without this every run would re-download ALL digests from MinIO. We
-      # restore last run's summaries first; then `mc mirror` below only fetches
-      # the day's new/changed file (and removes deleted ones via --remove).
+      # restore last run's summaries first; then `aws s3 sync --delete` below
+      # only fetches the day's new/changed file (and removes deleted ones).
       #   key         is unique per run  -> a fresh cache (with today's file) is
       #               always SAVED at the end of the run.
       #   restore-keys 'summaries-' prefix -> the most recent prior cache is
@@ -73,20 +67,24 @@ jobs:
 
       - name: Pull digests from MinIO into ./summaries
         env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
           MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
-          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
-          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
           MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
           MINIO_SECURE: ${{ vars.MINIO_SECURE || 'true' }}
         run: |
           scheme=https
           if [ "$MINIO_SECURE" = "false" ]; then scheme=http; fi
-          mc alias set src "$scheme://$MINIO_ENDPOINT" \
-            "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
           mkdir -p summaries
-          # Mirror the summaries/ prefix from the bucket into ./summaries.
-          mc mirror --overwrite --remove \
-            "src/$MINIO_BUCKET/summaries" summaries
+          # MinIO exposes an S3-compatible API, so the AWS CLI (preinstalled
+          # on GitHub-hosted runners) can sync straight against it. We used to
+          # shell out to MinIO's own `mc` client, but upstream archived the
+          # open-source client -- dl.min.io/client/... now returns 410, and
+          # its replacement build is under MinIO's commercial Enterprise
+          # License. Using the AWS CLI avoids depending on it entirely.
+          aws s3 sync "s3://$MINIO_BUCKET/summaries" summaries \
+            --endpoint-url "$scheme://$MINIO_ENDPOINT" --delete
           echo "Pulled $(find summaries -name '*.md' | wc -l) digest file(s)."
 
       - name: Setup Node.js
